@@ -173,12 +173,25 @@ class LlamaServerManager {
   }
 
   async start(modelPath, options = {}) {
-    if (this.startupPromise) return this.startupPromise;
-
     // A change in drafter presence for the same model must still restart the
     // server so the new speculative-decoding flags take effect.
     const requestedDraftPath = options.draftModelPath || null;
     const requestedContextSize = options.contextSize || DEFAULT_CONTEXT_SIZE;
+
+    // Join a start already under way only when it loads what this request
+    // asks for; otherwise wait for it and compare against what it left running.
+    while (this.startupPromise) {
+      const starting = this.startingRequest;
+      if (
+        starting.modelPath === modelPath &&
+        starting.draftModelPath === requestedDraftPath &&
+        requestedContextSize <= starting.contextSize
+      ) {
+        return this.startupPromise;
+      }
+      await this.startupPromise.catch(() => {});
+    }
+
     if (
       this.ready &&
       this.modelPath === modelPath &&
@@ -195,6 +208,11 @@ class LlamaServerManager {
       await this.stop();
     }
 
+    this.startingRequest = {
+      modelPath,
+      draftModelPath: requestedDraftPath,
+      contextSize: requestedContextSize,
+    };
     this.startupPromise = this._doStart(modelPath, options);
     try {
       await this.startupPromise;
@@ -884,6 +902,7 @@ class LlamaServerManager {
     return {
       available: this.isAvailable(),
       running: this.ready && this.process !== null,
+      starting: this.startupPromise !== null,
       port: this.port,
       modelPath: this.modelPath,
       modelName: this.modelPath ? path.basename(this.modelPath, ".gguf") : null,

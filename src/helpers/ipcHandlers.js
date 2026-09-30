@@ -86,7 +86,11 @@ const diarizationHost = (endpoint) => {
   } catch {}
   return null;
 };
-const { resolveLocalServerNeeds, shouldStopLocalServer } = require("./localServerPolicy");
+const {
+  resolveDictationPrewarmModel,
+  resolveLocalServerNeeds,
+  shouldStopLocalServer,
+} = require("./localServerPolicy");
 const autoStart = require("./autoStart");
 const { getRelaunchOptions, getRelaunchWaiter } = require("./autoStartPolicy");
 const HyprlandShortcutManager = require("./hyprlandShortcut");
@@ -1285,6 +1289,35 @@ class IPCHandlers {
     return !!modelName;
   }
 
+  // Loads the local model a dictation will run on while the user is still
+  // speaking. It unloads after a few idle minutes, and reloading it only once
+  // they stop would add that wait to the transcript. The models come from the
+  // env the renderer keeps in sync, as the startup pre-warm reads them.
+  _prewarmDictationModel(voiceAgentRequested) {
+    try {
+      const modelManager = require("./modelManagerBridge").default;
+      const status = modelManager.getServerStatus();
+      // A load already under way is whatever asked for it; leave it alone.
+      if (status.starting) return;
+      const modelId = resolveDictationPrewarmModel({
+        cleanupModel:
+          process.env.CLEANUP_PROVIDER === "local" ? process.env.LOCAL_CLEANUP_MODEL : "",
+        dictationAgentModel:
+          process.env.DICTATION_AGENT_PROVIDER === "local"
+            ? process.env.LOCAL_DICTATION_AGENT_MODEL
+            : "",
+        voiceAgentRequested,
+        // An idle unload stops the server without clearing the model id.
+        loadedModelId: status.running ? modelManager.currentServerModelId : null,
+      });
+      if (modelId) modelManager.prewarmServer(modelId).catch(() => {});
+    } catch (error) {
+      debugLogger.debug("llama-server dictation pre-warm error (non-fatal)", {
+        error: error.message,
+      });
+    }
+  }
+
   _syncStartupEnv(setVars, clearVars = []) {
     let changed = false;
     for (const [key, value] of Object.entries(setVars)) {
@@ -1810,6 +1843,8 @@ class IPCHandlers {
         return;
       }
       this.windowManager.setDictationLifecycleState(state, inputKind);
+      // "preparing" is also reported for a key press that never becomes a recording.
+      if (state === "recording") this._prewarmDictationModel(inputKind === "assistant");
     });
 
     ipcMain.on("show-agent-dictation-final-transcript", (event, text) => {

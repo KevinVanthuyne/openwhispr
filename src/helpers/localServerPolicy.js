@@ -40,6 +40,21 @@ export function resolveLocalServerNeeds({
   return { cleanup, dictationAgent, models };
 }
 
+// The model to load when a dictation starts, so an idle-unloaded server is warm
+// again by the time the user stops speaking. A voice assistant recording skips
+// cleanup and runs on the dictation agent's model. A server that holds another
+// model is left alone: swapping now could cut off a reply it is still
+// generating, and the request path swaps models itself when it needs to.
+export function resolveDictationPrewarmModel({
+  cleanupModel,
+  dictationAgentModel,
+  voiceAgentRequested,
+  loadedModelId,
+}) {
+  const wanted = (voiceAgentRequested ? dictationAgentModel : cleanupModel) || "";
+  return loadedModelId && loadedModelId !== wanted ? "" : wanted;
+}
+
 // The server holds one model, so it can also go when no scope needs the model
 // it has loaded: the next local request reloads it with the right one anyway.
 export function shouldStopLocalServer({ models }, loadedModelId) {
