@@ -188,3 +188,77 @@ test("with no model loaded, the server stops only when nothing is needed", async
   assert.equal(shouldStopLocalServer({ models: [] }, null), true);
   assert.equal(shouldStopLocalServer({ models: ["qwen3-8b-q4_k_m"] }, null), false);
 });
+
+test("a starting dictation pre-warms the cleanup model", async () => {
+  const { resolveDictationPrewarmModel } = await load();
+
+  assert.equal(
+    resolveDictationPrewarmModel({
+      cleanupModel: "qwen3-8b-q4_k_m",
+      dictationAgentModel: "gemma-4-e4b-it-q4_k_m",
+      voiceAgentRequested: false,
+      loadedModelId: null,
+    }),
+    "qwen3-8b-q4_k_m"
+  );
+});
+
+test("a voice assistant recording pre-warms the dictation agent's model", async () => {
+  const { resolveDictationPrewarmModel } = await load();
+
+  assert.equal(
+    resolveDictationPrewarmModel({
+      cleanupModel: "qwen3-8b-q4_k_m",
+      dictationAgentModel: "gemma-4-e4b-it-q4_k_m",
+      voiceAgentRequested: true,
+      loadedModelId: null,
+    }),
+    "gemma-4-e4b-it-q4_k_m"
+  );
+  // It skips cleanup, so a cloud agent leaves nothing local to load.
+  assert.equal(
+    resolveDictationPrewarmModel({
+      cleanupModel: "qwen3-8b-q4_k_m",
+      dictationAgentModel: "",
+      voiceAgentRequested: true,
+      loadedModelId: null,
+    }),
+    ""
+  );
+});
+
+test("a starting dictation with no local model pre-warms nothing", async () => {
+  const { resolveDictationPrewarmModel } = await load();
+
+  assert.equal(
+    resolveDictationPrewarmModel({
+      cleanupModel: undefined,
+      dictationAgentModel: undefined,
+      voiceAgentRequested: false,
+      loadedModelId: null,
+    }),
+    ""
+  );
+});
+
+test("a starting dictation never swaps out a model the server is holding", async () => {
+  const { resolveDictationPrewarmModel } = await load();
+
+  assert.equal(
+    resolveDictationPrewarmModel({
+      cleanupModel: "qwen3-8b-q4_k_m",
+      voiceAgentRequested: false,
+      loadedModelId: "gemma-4-e4b-it-q4_k_m",
+    }),
+    ""
+  );
+  // The same model is asked for again, which restarts its idle countdown.
+  assert.equal(
+    resolveDictationPrewarmModel({
+      cleanupModel: "qwen3-8b-q4_k_m",
+      voiceAgentRequested: false,
+      loadedModelId: "qwen3-8b-q4_k_m",
+    }),
+    "qwen3-8b-q4_k_m"
+  );
+});

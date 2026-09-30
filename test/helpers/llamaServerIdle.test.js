@@ -97,3 +97,66 @@ test("a request that arrives while /slots is checked keeps the server", async (t
 
   assert.equal(stops.length, 0, "the newer request's timer owns the decision now");
 });
+
+// A manager whose start resolves only when the test says so, recording each
+// model it was asked to load.
+function makeSlowManager() {
+  const { manager } = makeManager();
+  const loads = [];
+  manager._doStart = (modelPath, options = {}) =>
+    new Promise((resolve) => {
+      loads.push({
+        modelPath,
+        finish: () => {
+          manager.ready = true;
+          manager.modelPath = modelPath;
+          manager.draftModelPath = options.draftModelPath || null;
+          resolve();
+        },
+      });
+    });
+  return { manager, loads };
+}
+
+test("a request for the model already loading joins that load", async () => {
+  const { manager, loads } = makeSlowManager();
+
+  const first = manager.start("/models/main.gguf");
+  const second = manager.start("/models/main.gguf");
+  loads[0].finish();
+  await Promise.all([first, second]);
+
+  assert.equal(loads.length, 1);
+});
+
+// Joining it would hand the request a server holding the wrong model.
+test("a request for another model waits for the load under way, then loads its own", async () => {
+  const { manager, loads } = makeSlowManager();
+
+  const first = manager.start("/models/main.gguf");
+  const second = manager.start("/models/other.gguf");
+  loads[0].finish();
+  await first;
+  await settle();
+  assert.equal(loads.length, 2, "the second model starts once the first load is done");
+  assert.equal(loads[1].modelPath, "/models/other.gguf");
+
+  loads[1].finish();
+  await second;
+  assert.equal(manager.modelPath, "/models/other.gguf");
+});
+
+test("a request needing a larger context does not join a smaller load", async () => {
+  const { manager, loads } = makeSlowManager();
+
+  const first = manager.start("/models/main.gguf", { contextSize: 16384 });
+  const second = manager.start("/models/main.gguf", { contextSize: 32768 });
+  loads[0].finish();
+  await first;
+  await settle();
+  assert.equal(loads.length, 2);
+
+  loads[1].finish();
+  await second;
+  assert.equal(manager.contextSize, 32768);
+});
